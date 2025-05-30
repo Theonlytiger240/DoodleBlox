@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>DoodleBlox</title>
+  <style>
+    body { font-family: sans-serif; padding: 10px; }
+    .hidden { display: none; }
+    input, button { margin: 5px 0; display: block; }
+    #gameList img { width: 50px; height: 50px; }
+  </style>
+</head>
+<body>
+
+<h1>DoodleBlox</h1>
+<div id="auth">
+  <input id="email" type="email" placeholder="Email">
+  <input id="password" type="password" placeholder="Password">
+  <button onclick="signUp()">Sign Up</button>
+  <button onclick="signIn()">Sign In</button>
+  <button onclick="resetPassword()">Reset Password</button>
+</div>
+
+<div id="app" class="hidden">
+  <p>Welcome, <span id="userEmail"></span></p>
+  <p>DoodleBux: <span id="buxCount">0</span></p>
+  
+  <h3>DoodleFriends</h3>
+  <input id="friendEmail" placeholder="Friend's Email">
+  <button onclick="sendFriendRequest()">Send Friend Request</button>
+  <div id="friendRequests"></div>
+  <div id="friendList"></div>
+  
+  <h3>Upload DoodleGames</h3>
+  <input id="gameTitle" placeholder="Game Title">
+  <input id="gameIcon" type="file">
+  <button onclick="uploadGame()">Upload DoodleGames</button>
+  
+  <h3>Your DoodleGames</h3>
+  <div id="gameList"></div>
+
+  <button onclick="signOut()">Sign Out</button>
+</div>
+
+<!-- Firebase -->
+<script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
+
+<script>
+const firebaseConfig = {
+  apiKey: "AIzaSyBLq-MBX_AXTWo6ksi1690z5Ecxak_ABHw",
+  authDomain: "doodleblox-18ab9.firebaseapp.com",
+  databaseURL: "https://doodleblox-18ab9-default-rtdb.firebaseio.com",
+  projectId: "doodleblox-18ab9",
+  appId: "1:1021914943421:web:a9f1a92f2d7c650882ccd4"
+};
+firebase.initializeApp(firebaseConfig);
+
+const auth = firebase.auth();
+const db = firebase.database();
+
+auth.onAuthStateChanged(user => {
+  if (user) {
+    document.getElementById("auth").classList.add("hidden");
+    document.getElementById("app").classList.remove("hidden");
+    document.getElementById("userEmail").innerText = user.email;
+    updateBux();
+    loadFriends();
+    loadFriendRequests();
+    loadGames();
+  } else {
+    document.getElementById("auth").classList.remove("hidden");
+    document.getElementById("app").classList.add("hidden");
+  }
+});
+
+function signUp() {
+  const email = emailInput().value;
+  const pass = passwordInput().value;
+  auth.createUserWithEmailAndPassword(email, pass);
+}
+
+function signIn() {
+  const email = emailInput().value;
+  const pass = passwordInput().value;
+  auth.signInWithEmailAndPassword(email, pass);
+}
+
+function resetPassword() {
+  const email = emailInput().value;
+  auth.sendPasswordResetEmail(email).then(() => alert("Reset sent"));
+}
+
+function signOut() {
+  auth.signOut();
+}
+
+function emailInput() {
+  return document.getElementById("email");
+}
+
+function passwordInput() {
+  return document.getElementById("password");
+}
+
+function updateBux() {
+  const uid = auth.currentUser.uid;
+  const today = new Date().toISOString().split('T')[0];
+
+  const buxRef = db.ref('bux/' + uid);
+  buxRef.once('value').then(snap => {
+    let data = snap.val() || {};
+    if (data.lastLogin !== today) {
+      data.count = (data.count || 0) + 1;
+      data.lastLogin = today;
+      buxRef.set(data);
+    }
+    document.getElementById("buxCount").innerText = data.count || 0;
+  });
+}
+
+function sendFriendRequest() {
+  const toEmail = document.getElementById("friendEmail").value;
+  db.ref("emailToUid").orderByValue().equalTo(toEmail).once("value").then(snap => {
+    if (snap.exists()) {
+      const toUid = Object.keys(snap.val())[0];
+      const fromUid = auth.currentUser.uid;
+      const requestId = Date.now().toString();
+      db.ref("friendRequests/" + toUid + "/" + requestId).set({
+        from: fromUid,
+        email: auth.currentUser.email
+      });
+      alert("Request sent");
+    } else {
+      alert("User not found");
+    }
+  });
+}
+
+function loadFriendRequests() {
+  const uid = auth.currentUser.uid;
+  db.ref("friendRequests/" + uid).on("value", snap => {
+    const container = document.getElementById("friendRequests");
+    container.innerHTML = "<h4>Requests</h4>";
+    snap.forEach(child => {
+      const data = child.val();
+      const div = document.createElement("div");
+      const btn = document.createElement("button");
+      btn.textContent = "Accept";
+      btn.onclick = function() {
+        acceptFriendRequest(child.key, btn);
+      };
+      div.textContent = data.email + " ";
+      div.appendChild(btn);
+      container.appendChild(div);
+    });
+  });
+}
+
+function acceptFriendRequest(requestId, button) {
+  const uid = auth.currentUser.uid;
+  db.ref("friendRequests/" + uid + "/" + requestId).once("value").then(snap => {
+    const data = snap.val();
+    if (data) {
+      const otherId = data.from;
+      const updates = {};
+      updates["/friends/" + uid + "/" + otherId] = true;
+      updates["/friends/" + otherId + "/" + uid] = true;
+      updates["/friendRequests/" + uid + "/" + requestId] = null;
+      db.ref().update(updates).then(() => {
+        button.style.display = "none";
+        loadFriends();
+      });
+    }
+  });
+}
+
+function loadFriends() {
+  const uid = auth.currentUser.uid;
+  db.ref("friends/" + uid).once("value").then(snap => {
+    const list = document.getElementById("friendList");
+    list.innerHTML = "<h4>Friends</h4>";
+    const ids = Object.keys(snap.val() || {});
+    ids.forEach(fid => {
+      db.ref("emailToUid/" + fid).once("value").then(emailSnap => {
+        const item = document.createElement("div");
+        item.textContent = "Friend ID: " + fid;
+        list.appendChild(item);
+      });
+    });
+  });
+}
+
+function uploadGame() {
+  const title = document.getElementById("gameTitle").value;
+  const file = document.getElementById("gameIcon").files[0];
+  const reader = new FileReader();
+  reader.onloadend = function() {
+    const icon = reader.result;
+    const uid = auth.currentUser.uid;
+    const id = Date.now().toString();
+    db.ref("games/" + uid + "/" + id).set({ title, icon });
+    loadGames();
+  };
+  if (file) reader.readAsDataURL(file);
+}
+
+function loadGames() {
+  const uid = auth.currentUser.uid;
+  db.ref("games/" + uid).once("value").then(snap => {
+    const list = document.getElementById("gameList");
+    list.innerHTML = "";
+    snap.forEach(child => {
+      const data = child.val();
+      const div = document.createElement("div");
+      div.innerHTML = `<strong>${data.title}</strong><br><img src="${data.icon}">`;
+      list.appendChild(div);
+    });
+  });
+}
+
+// Save user email to UID mapping
+auth.onAuthStateChanged(user => {
+  if (user) {
+    db.ref("emailToUid/" + user.uid).set(user.email);
+  }
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>DoodleBlox</title>
+  <style>
+    body { font-family: sans-serif; text-align: center; }
+    #auth, #dashboard { display: none; }
+    .game-card img { width: 100px; height: 100px; }
+  </style>
+</head>
+<body>
+
+  <h1 id="header">Welcome to DoodleBlox</h1>
+  <p id="doodlebux" style="font-weight: bold;"></p>
+
+  <div id="auth">
+    <h2>Login or Sign Up</h2>
+    <input type="email" id="email" placeholder="Email"><br>
+    <input type="password" id="password" placeholder="Password"><br>
+    <button onclick="signUp()">Sign Up</button>
+    <button onclick="signIn()">Sign In</button>
+  </div>
+
+  <div id="dashboard">
+    <h2>Upload DoodleGames</h2>
+    <input type="text" id="gameTitle" placeholder="Game Title"><br>
+    <input type="file" id="gameIcon"><br>
+    <button onclick="uploadGame()">Upload</button>
+
+    <h2>Your DoodleGames</h2>
+    <div id="gamesList"></div>
+
+    <h2>Add DoodleFriends</h2>
+    <input type="email" id="friendEmail" placeholder="Friend's Email">
+    <button onclick="sendFriendRequest()">Send Friend Request</button>
+
+    <h2>Pending Friend Requests</h2>
+    <div id="requestsList"></div>
+
+    <h2>Your DoodleFriends' Games</h2>
+    <div id="friendsGames"></div>
+  </div>
+
+  <!-- Firebase -->
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-database-compat.js"></script>
+
+  <script>
+    const firebaseConfig = {
+      apiKey: "AIzaSyBLq-MBX_AXTWo6ksi1690z5Ecxak_ABHw",
+      authDomain: "doodleblox-18ab9.firebaseapp.com",
+      databaseURL: "https://doodleblox-18ab9-default-rtdb.firebaseio.com",
+      projectId: "doodleblox-18ab9",
+      appId: "1:1021914943421:web:a9f1a92f2d7c650882ccd4"
+    };
+
+    firebase.initializeApp(firebaseConfig);
+    const auth = firebase.auth();
+    const db = firebase.database();
+    let currentUser;
+
+    function showDashboard() {
+      document.getElementById("auth").style.display = "none";
+      document.getElementById("dashboard").style.display = "block";
+      document.getElementById("header").innerText = "DoodleBlox";
+      updateDoodleBux();
+      loadGames();
+      loadFriendRequests();
+      loadFriendsGames();
+    }
+
+    function signUp() {
+      const email = emailInput().value;
+      const pass = passwordInput().value;
+      auth.createUserWithEmailAndPassword(email, pass).then(() => {
+        db.ref("users/" + encode(email)).set({ email, doodlebuxDate: Date.now() });
+      });
+    }
+
+    function signIn() {
+      const email = emailInput().value;
+      const pass = passwordInput().value;
+      auth.signInWithEmailAndPassword(email, pass).then(() => {});
+    }
+
+    auth.onAuthStateChanged(user => {
+      if (user) {
+        currentUser = user;
+        showDashboard();
+      } else {
+        document.getElementById("auth").style.display = "block";
+        document.getElementById("dashboard").style.display = "none";
+      }
+    });
+
+    function uploadGame() {
+      const title = document.getElementById("gameTitle").value;
+      const file = document.getElementById("gameIcon").files[0];
+      if (!title || !file) return;
+
+      const reader = new FileReader();
+      reader.onload = () => {
+        const base64 = reader.result;
+        db.ref("games/" + encode(currentUser.email)).push({ title, icon: base64 });
+        document.getElementById("gameTitle").value = "";
+        document.getElementById("gameIcon").value = "";
+      };
+      reader.readAsDataURL(file);
+    }
+
+    function loadGames() {
+      const list = document.getElementById("gamesList");
+      list.innerHTML = "";
+      db.ref("games/" + encode(currentUser.email)).once("value", snap => {
+        snap.forEach(child => {
+          const game = child.val();
+          const card = `<div class="game-card"><p>${game.title}</p><img src="${game.icon}"></div>`;
+          list.innerHTML += card;
+        });
+      });
+    }
+
+    function sendFriendRequest() {
+      const toEmail = document.getElementById("friendEmail").value;
+      const from = encode(currentUser.email);
+      const to = encode(toEmail);
+      db.ref("friendRequests/" + to + "/" + from).set({ from: currentUser.email });
+    }
+
+    function loadFriendRequests() {
+      const list = document.getElementById("requestsList");
+      list.innerHTML = "";
+      const me = encode(currentUser.email);
+      db.ref("friendRequests/" + me).on("value", snap => {
+        list.innerHTML = "";
+        snap.forEach(child => {
+          const req = child.val();
+          const btn = `<button onclick="acceptRequest('${child.key}', '${req.from}')">Accept ${req.from}</button>`;
+          list.innerHTML += btn + "<br>";
+        });
+      });
+    }
+
+    function acceptRequest(key, fromEmail) {
+      const me = encode(currentUser.email);
+      const from = encode(fromEmail);
+      db.ref("friends/" + me + "/" + from).set(true);
+      db.ref("friends/" + from + "/" + me).set(true);
+      db.ref("friendRequests/" + me + "/" + key).remove();
+      loadFriendsGames();
+    }
+
+    function loadFriendsGames() {
+      const me = encode(currentUser.email);
+      db.ref("friends/" + me).once("value", snap => {
+        const out = document.getElementById("friendsGames");
+        out.innerHTML = "";
+        snap.forEach(friend => {
+          const email = friend.key;
+          db.ref("games/" + email).once("value", games => {
+            games.forEach(child => {
+              const game = child.val();
+              const card = `<div class="game-card"><p>${game.title}</p><img src="${game.icon}"></div>`;
+              out.innerHTML += card;
+            });
+          });
+        });
+      });
+    }
+
+    function updateDoodleBux() {
+      const userRef = db.ref("users/" + encode(currentUser.email));
+      userRef.once("value", snap => {
+        const last = snap.val()?.doodlebuxDate || Date.now();
+        const days = Math.floor((Date.now() - last) / (1000 * 60 * 60 * 24));
+        const doodlebux = days;
+        document.getElementById("doodlebux").innerText = "DoodleBux: " + doodlebux;
+      });
+    }
+
+    function emailInput() {
+      return document.getElementById("email");
+    }
+
+    function passwordInput() {
+      return document.getElementById("password");
+    }
+
+    function encode(email) {
+      return email.replace(/\./g, "_");
+    }
+  </script>
+</body>
+</html>
